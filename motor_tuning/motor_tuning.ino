@@ -10,6 +10,7 @@ const int maxDutyCnt = pow(2, pwmRes) - 1 ;
 const int encoderCPR = 64;
 const float gearRatio = 18.75;
 const float countsPerRev = ((float)encoderCPR) * gearRatio;
+const float alpha = 0.2;
 
 ESP32Encoder encoder;
 int duty = 0;
@@ -20,7 +21,7 @@ float prevVel = 0.0;
 float kp = 0.0;
 float ki = 0.0;
 float kd = 0.0;
-float currentTime, prevTime;
+float currentTime, prevTime; 
 
 void setup() {
   Serial.begin(115200);
@@ -65,10 +66,11 @@ void loop() {
   currentTime = micros() / 1e6f;
   float dAngle = ((currentCount - prevCount) / countsPerRev) * TWO_PI;
   float dTime = currentTime - prevTime;
-  currentVel = dAngle / dTime;
-  prevCount = currentCount;
-  prevTime = currentTime;
-  prevVel = currentVel;
-  Serial.println("Current_Velocity: " + String(currentVel));
-  delay(100);
+  if (dAngle != 0.0 && dTime >= 0.005f) {
+    currentVel = alpha * (dAngle / dTime) + (1.0f - alpha) * prevVel;
+    prevCount = currentCount;
+    prevTime = currentTime;
+    prevVel = currentVel;
+    Serial.println(currentVel);
+  }
 }
