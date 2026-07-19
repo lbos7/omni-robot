@@ -6,6 +6,12 @@ enum GainTuningState {
   KD,
 };
 
+enum TestState {
+  STEP,
+  RAMP,
+  SIN,
+};
+
 const int encoderA = 36;
 const int encoderB = 39;
 const int pwm = 18;
@@ -29,17 +35,21 @@ float prevVel = 0.0;
 float kp = 0.22;
 float ki = 0.2;
 float kd = 0.002;
-float currentTime, prevTime, stepStart;
+float currentTime, prevTime, stepStart, rampStart;
 enum GainTuningState gainState = KP;
+enum TestState testState = STEP;
 bool doStep = false;
 float setpoint = 0.0;
 float desiredVel = 6.0;
 float velIntError = 0.0;
 float prevVelError = 0.0;
+bool negSetpoint = false;
+bool useRamp = false;
+bool useSin = false;
+float rampTime = 3.0;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("DesiredVel:,ActualVel:");
   encoder.attachFullQuad(encoderA, encoderB);
   encoder.setCount(0);
 
@@ -58,67 +68,80 @@ void loop() {
     float adjustment = 0.0;
     switch (input) {
       case 'w':
-        adjustment += 0.01;
+        if (gainState == KD) {
+          adjustment = 0.001;
+        } else {
+          adjustment = 0.01;
+        }
         break;
 
       case 's':
-        adjustment -= 0.01;
+        if (gainState == KD) {
+          adjustment = -0.001;
+        } else {
+          adjustment = -0.01;
+        }
         break;
 
       case 'p':
         gainState = KP;
-        Serial.println("gainState set to KP");
         break;
 
       case 'i':
         gainState = KI;
-        Serial.println("gainState set to KI");
         break;
 
       case 'd':
         gainState = KD;
-        Serial.println("gainState set to KD");
+        break;
+
+      case 't':
+        testState = STEP;
+        break;
+
+      case 'y':
+        testState = RAMP;
+        break;
+
+      case 'u':
+        testState = SIN;
         break;
 
       // Increase desired speed
       case 'r':
         desiredVel += 1.0;
-        Serial.print("Desired speed: ");
-        Serial.println(desiredVel);
         break;
 
 
       // Decrease desired speed
       case 'f':
         desiredVel -= 1.0;
-        Serial.print("Desired speed: ");
-        Serial.println(desiredVel);
         break;
 
 
-      // // Increase acceleration
-      // case 'a':
-      //   accel += 0.5;
-      //   Serial.print("Acceleration: ");
-      //   Serial.println(accel);
-      //   break;
+      // Increase ramp time
+      case 'a':
+        rampTime += 0.1;
+        break;
 
 
-      // // Decrease acceleration
-      // case 'z':
-      //   accel -= 0.5;
-      //   if (accel < 0) accel = 0;
-      //   Serial.print("Acceleration: ");
-      //   Serial.println(accel);
-      //   break;
+      // Decrease acceleration
+      case 'z':
+        rampTime -= 0.1;
+        break;
 
 
       // Activate speed command
       case 'g':
-        setpoint = desiredVel;
-        stepStart = micros() / 1e6f;
-        prevTime = stepStart;
-        Serial.println("Step command activated");
+        if (testState == STEP) {
+          setpoint = desiredVel;
+          stepStart = micros() / 1e6f;
+          prevTime = stepStart;
+        } else if (testState == RAMP)  {
+          setpoint = 0.0;
+          rampStart = micros() / 1e6f;
+          prevTime = rampStart;
+        }
         break;
     }
 
@@ -144,12 +167,34 @@ void loop() {
   float dAngle = ((currentCount - prevCount) / countsPerRev) * TWO_PI;
   float dTime = currentTime - prevTime;
   if (dTime >= 0.005f) {
-    currentVel = alpha * (dAngle / dTime) + (1.0f - alpha) * prevVel;
 
+    if (testState == STEP) {
+      float dStepTime = currentTime - stepStart;
+      if (dStepTime > 6.0) {
+        setpoint = 0.0;
+        negSetpoint = false;
+        digitalWrite(dir, LOW);
+        ledcWrite(pwm, 0);
+      } else if (!negSetpoint && dStepTime > 3.0) {
+        setpoint = -setpoint;
+        negSetpoint = true;
+      }
+    } else if (testState == RAMP) {
+      float dRampTime = currentTime - rampStart;
+      if (dRampTime > rampTime + 3.0) {
+        setpoint = 0.0;
+        digitalWrite(dir, LOW);
+        ledcWrite(pwm, 0);
+      } else if (dRampTime < rampTime) {
+        setpoint = desiredVel * (dRampTime / rampTime);
+      }
+    }
+
+    currentVel = alpha * (dAngle / dTime) + (1.0f - alpha) * prevVel;
     float velError = setpoint - currentVel;
     float pTerm = kp * velError;
 
-    if (abs(setpoint) < 0.5) {
+    if (abs(setpoint) < 1.5) {
       velIntError = 0.0;
     } else {
       velIntError += velError * dTime;
@@ -172,19 +217,21 @@ void loop() {
     }
     Serial.print(desiredVel);
     Serial.print(",");
+    Serial.print(-desiredVel);
+    Serial.print(",");
+    Serial.print(setpoint);
+    Serial.print(",");
     Serial.print(currentVel);
     Serial.print(",");
     Serial.print(kp);
     Serial.print(",");
     Serial.print(ki);
     Serial.print(",");
-    Serial.println(kd,4);
-
-    if (currentTime - stepStart > 3.0) {
-      setpoint = 0.0;
-      digitalWrite(dir, LOW);
-      ledcWrite(pwm, 0);
-    }
+    Serial.print(kd,4);
+    Serial.print(",");
+    Serial.print(gainState);
+    Serial.print(",");
+    Serial.println(testState);
 
     prevCount = currentCount;
     prevTime = currentTime;
